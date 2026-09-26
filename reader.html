@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CBZ & PDF Reader</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- JSZip CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans select-none overflow-x-hidden">
+
+    <!-- Top Navigation Bar -->
+    <header class="bg-slate-900 border-b border-slate-800 p-3 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-50 shadow-md">
+        <div class="flex items-center gap-3">
+            <label for="file-input" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded cursor-pointer transition shadow">
+                Buka File (.PDF / .CBZ)
+            </label>
+            <input type="file" id="file-input" accept=".pdf, .cbz, .zip" class="hidden">
+            <span id="file-name" class="text-xs text-slate-400 font-medium truncate max-w-[200px] sm:max-w-xs">Belum ada file dipilih</span>
+        </div>
+
+        <!-- Controls Section -->
+        <div id="controls" class="hidden flex items-center flex-wrap gap-2 text-xs">
+            <!-- Mode Switcher -->
+            <select id="view-mode" class="bg-slate-800 border border-slate-700 text-slate-200 px-2 py-1 rounded focus:outline-none focus:border-blue-500">
+                <option value="single">Single Page</option>
+                <option value="scroll">Webtoon / Scroll Mode</option>
+            </select>
+
+            <div class="h-4 w-[1px] bg-slate-700 mx-1"></div>
+
+            <!-- Page Navigation (Single Mode) -->
+            <div id="nav-buttons" class="flex items-center gap-1">
+                <button id="prev-btn" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700">← Prev</button>
+                <span class="text-slate-400 px-1"><span id="current-page-nav">1</span> / <span id="total-pages-nav">0</span></span>
+                <button id="next-btn" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700">Next →</button>
+            </div>
+
+            <div class="h-4 w-[1px] bg-slate-700 mx-1"></div>
+
+            <!-- Zoom Controls -->
+            <div class="flex items-center gap-1">
+                <button id="zoom-out" class="bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded border border-slate-700 font-bold">-</button>
+                <span id="zoom-level" class="text-slate-400 w-10 text-center">100%</span>
+                <button id="zoom-in" class="bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded border border-slate-700 font-bold">+</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Reader Viewport -->
+    <main class="flex-1 flex flex-col items-center justify-start p-2 sm:p-4 min-h-[calc(100vh-60px)]">
+        
+        <!-- Welcome / Empty State -->
+        <div id="empty-state" class="text-center p-8 border-2 border-dashed border-slate-800 rounded-xl max-w-md my-auto">
+            <svg class="w-16 h-16 text-slate-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+            </svg>
+            <h2 class="text-lg font-bold text-slate-300 mb-1">Tidak Ada Dokumen Ditampilkan</h2>
+            <p class="text-xs text-slate-500">Buka file PDF atau CBZ/ZIP untuk mulai membaca langsung di browser tanpa perlu mengunggah ke server.</p>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div id="loading" class="hidden text-center my-auto">
+            <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-slate-700 border-t-blue-500 mb-3"></div>
+            <p id="loading-text" class="text-sm text-slate-400">Membaca file...</p>
+        </div>
+
+        <!-- Header Indikator Halaman Paling Atas -->
+        <div id="page-header-indicator" class="hidden sticky top-14 z-40 bg-slate-900/90 backdrop-blur border border-slate-800 px-4 py-1.5 rounded-full mb-4 shadow-lg text-xs font-semibold text-blue-400">
+            Halaman <span id="current-page-top">1</span> dari <span id="total-pages-top">0</span>
+        </div>
+
+        <!-- Container Tempat Halaman Ditampilkan -->
+        <div id="reader-container" class="hidden w-full flex flex-col items-center gap-4 my-auto"></div>
+    </main>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // Elements
+        const fileInput = document.getElementById('file-input');
+        const fileNameEl = document.getElementById('file-name');
+        const controls = document.getElementById('controls');
+        const emptyState = document.getElementById('empty-state');
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loading-text');
+        const readerContainer = document.getElementById('reader-container');
+        const viewModeSelect = document.getElementById('view-mode');
+        
+        // Navigation Elements
+        const currentPageNav = document.getElementById('current-page-nav');
+        const totalPagesNav = document.getElementById('total-pages-nav');
+        const currentPageTop = document.getElementById('current-page-top');
+        const totalPagesTop = document.getElementById('total-pages-top');
+        const pageHeaderIndicator = document.getElementById('page-header-indicator');
+
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        const navButtons = document.getElementById('nav-buttons');
+        const zoomInBtn = document.getElementById('zoom-in');
+        const zoomOutBtn = document.getElementById('zoom-out');
+        const zoomLevelEl = document.getElementById('zoom-level');
+
+        // State variables
+        let pagesData = [];
+        let currentPage = 1;
+        let totalPages = 0;
+        let zoomLevel = 1.0;
+        let isPdf = false;
+        let pdfDoc = null;
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            fileNameEl.innerText = file.name;
+            showLoading('Membuka file...');
+
+            const fileExt = file.name.split('.').pop().toLowerCase();
+            pagesData = [];
+            currentPage = 1;
+            zoomLevel = 1.0;
+            updateZoomDisplay();
+
+            try {
+                if (fileExt === 'pdf') {
+                    isPdf = true;
+                    await loadPDF(file);
+                } else if (fileExt === 'cbz' || fileExt === 'zip') {
+                    isPdf = false;
+                    await loadCBZ(file);
+                } else {
+                    alert('Format file tidak didukung.');
+                    hideLoading();
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Terjadi kesalahan saat membaca file.');
+                hideLoading();
+            }
+        });
+
+        async function loadPDF(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            totalPages = pdfDoc.numPages;
+            
+            updatePageDisplay(currentPage, totalPages);
+            hideLoading();
+            renderCurrentView();
+        }
+
+        async function loadCBZ(file) {
+            const zip = new JSZip();
+            const contents = await zip.loadAsync(file);
+
+            const imageEntries = Object.keys(contents.files).filter(filename => {
+                const isFile = !contents.files[filename].dir;
+                const isImage = /\.(jpg|jpeg|png|webp|gif)$/i.test(filename);
+                return isFile && isImage;
+            }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+            totalPages = imageEntries.length;
+            updatePageDisplay(currentPage, totalPages);
+
+            loadingText.innerText = `Mengekstrak ${totalPages} gambar...`;
+
+            for (let i = 0; i < imageEntries.length; i++) {
+                const blob = await contents.files[imageEntries[i]].async('blob');
+                const url = URL.createObjectURL(blob);
+                pagesData.push(url);
+            }
+
+            hideLoading();
+            renderCurrentView();
+        }
+
+        function updatePageDisplay(current, total) {
+            currentPageNav.innerText = current;
+            totalPagesNav.innerText = total;
+            currentPageTop.innerText = current;
+            totalPagesTop.innerText = total;
+        }
+
+        async function renderCurrentView() {
+            readerContainer.innerHTML = '';
+            const mode = viewModeSelect.value;
+
+            if (mode === 'single') {
+                navButtons.classList.remove('hidden');
+                await renderSinglePage(currentPage);
+            } else {
+                navButtons.classList.add('hidden');
+                await renderScrollAllPages();
+            }
+        }
+
+        async function renderSinglePage(pageNum) {
+            readerContainer.innerHTML = '';
+            
+            if (isPdf) {
+                const page = await pdfDoc.getPage(pageNum);
+                const canvas = document.createElement('canvas');
+                canvas.className = 'max-w-full rounded shadow-lg border border-slate-800 transition-all';
+                
+                const viewport = page.getViewport({ scale: zoomLevel * 1.5 });
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                const ctx = canvas.getContext('2d');
+                await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+                readerContainer.appendChild(canvas);
+            } else {
+                const img = document.createElement('img');
+                img.src = pagesData[pageNum - 1];
+                img.className = 'max-w-full rounded shadow-lg border border-slate-800 transition-all';
+                img.style.width = `${zoomLevel * 100}%`;
+                readerContainer.appendChild(img);
+            }
+
+            updatePageDisplay(pageNum, totalPages);
+        }
+
+        async function renderScrollAllPages() {
+            readerContainer.innerHTML = '';
+
+            for (let i = 1; i <= totalPages; i++) {
+                const pageWrapper = document.createElement('div');
+                pageWrapper.dataset.pageNumber = i;
+                pageWrapper.className = 'page-element w-full flex justify-center';
+
+                if (isPdf) {
+                    const page = await pdfDoc.getPage(i);
+                    const canvas = document.createElement('canvas');
+                    canvas.className = 'max-w-full rounded shadow-lg border border-slate-800 mb-2';
+                    
+                    const viewport = page.getViewport({ scale: zoomLevel * 1.2 });
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    const ctx = canvas.getContext('2d');
+                    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+                    pageWrapper.appendChild(canvas);
+                } else {
+                    const img = document.createElement('img');
+                    img.src = pagesData[i - 1];
+                    img.className = 'max-w-full rounded shadow-lg border border-slate-800 mb-2';
+                    img.style.width = `${zoomLevel * 100}%`;
+                    pageWrapper.appendChild(img);
+                }
+                
+                readerContainer.appendChild(pageWrapper);
+            }
+        }
+
+        // Auto detect halaman aktif saat Scroll Mode
+        window.addEventListener('scroll', () => {
+            if (viewModeSelect.value === 'scroll' && totalPages > 0) {
+                const pageElements = document.querySelectorAll('.page-element');
+                pageElements.forEach(el => {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.top <= window.innerHeight / 2 && rect.bottom >= window.innerHeight / 2) {
+                        const pageNum = parseInt(el.dataset.pageNumber);
+                        currentPage = pageNum;
+                        updatePageDisplay(currentPage, totalPages);
+                    }
+                });
+            }
+        });
+
+        // Navigation Events
+        prevBtn.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                renderSinglePage(currentPage);
+            }
+        });
+
+        nextBtn.addEventListener('click', () => {
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderSinglePage(currentPage);
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (viewModeSelect.value === 'single' && !readerContainer.classList.contains('hidden')) {
+                if (e.key === 'ArrowRight' || e.key === ' ') {
+                    if (currentPage < totalPages) {
+                        currentPage++;
+                        renderSinglePage(currentPage);
+                    }
+                } else if (e.key === 'ArrowLeft') {
+                    if (currentPage > 1) {
+                        currentPage--;
+                        renderSinglePage(currentPage);
+                    }
+                }
+            }
+        });
+
+        viewModeSelect.addEventListener('change', () => {
+            renderCurrentView();
+        });
+
+        zoomInBtn.addEventListener('click', () => {
+            if (zoomLevel < 2.5) {
+                zoomLevel += 0.2;
+                updateZoomDisplay();
+                renderCurrentView();
+            }
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (zoomLevel > 0.4) {
+                zoomLevel -= 0.2;
+                updateZoomDisplay();
+                renderCurrentView();
+            }
+        });
+
+        function updateZoomDisplay() {
+            zoomLevelEl.innerText = `${Math.round(zoomLevel * 100)}%`;
+        }
+
+        function showLoading(text) {
+            emptyState.classList.add('hidden');
+            readerContainer.classList.add('hidden');
+            controls.classList.add('hidden');
+            pageHeaderIndicator.classList.add('hidden');
+            loading.classList.remove('hidden');
+            loadingText.innerText = text;
+        }
+
+        function hideLoading() {
+            loading.classList.add('hidden');
+            readerContainer.classList.remove('hidden');
+            controls.classList.remove('hidden');
+            pageHeaderIndicator.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
